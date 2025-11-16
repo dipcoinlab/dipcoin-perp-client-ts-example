@@ -1,18 +1,18 @@
-# 配置私钥
+# Configure Private Key
 
-根目录新建 `.env` 文件
+Create a `.env` file in the root directory
 
 ```
 PRIVATE_KEY=your-private-key-here
 ```
 
-# 安装
+# Installation
 
 ```
 yarn
 ```
 
-# 运行测试用例
+# Run Test Cases
 
 ```
 yarn start
