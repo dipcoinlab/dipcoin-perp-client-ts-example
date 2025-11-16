@@ -38,17 +38,17 @@ async function main() {
       return;
     }
 
-    // Deposit to bank
+    // 1. Deposit to bank
     console.log("\n=== Deposit ===");
     await sdk.depositToBank(10);
     console.log("Deposit to bank success!");
 
-    // Withdraw from bank
+    // 2. Withdraw from bank
     console.log("\n=== Withdraw ===");
     await sdk.withdrawFromBank(5);
     console.log("Withdraw from bank success!");
 
-    // 1. Get account information
+    // 3. Get account information
     console.log("\n=== Getting Account Info ===");
     const accountInfo = await sdk.getAccountInfo();
     if (accountInfo.status && accountInfo.data) {
@@ -60,7 +60,7 @@ async function main() {
       console.error("Failed to get account info:", accountInfo.error);
     }
 
-    // 2. Get positions
+    // 4. Get positions
     console.log("\n=== Getting Positions ===");
     const positions = await sdk.getPositions();
     if (positions.status && positions.data) {
@@ -74,7 +74,7 @@ async function main() {
       console.error("Failed to get positions:", positions.error);
     }
 
-    // 3. Get open orders
+    // 5. Get open orders
     console.log("\n=== Getting Open Orders ===");
     const openOrders = await sdk.getOpenOrders();
     if (openOrders.status && openOrders.data) {
@@ -88,7 +88,7 @@ async function main() {
       console.error("Failed to get open orders:", openOrders.error);
     }
 
-    // 4. Get trading pairs and PerpetualID
+    // 6. Get trading pairs and PerpetualID
     console.log("\n=== Getting Trading Pairs ===");
     const tradingPairsResult = await sdk.getTradingPairs();
     if (tradingPairsResult.status && tradingPairsResult.data) {
@@ -109,7 +109,7 @@ async function main() {
       return;
     }
 
-    // 5. Get PerpetualID for BTC-PERP
+    // 7. Get PerpetualID for BTC-PERP
     const symbolToTrade = "BTC-PERP";
     console.log(`\n=== Getting PerpetualID for ${symbolToTrade} ===`);
     const perpetualId = await sdk.getPerpetualID(symbolToTrade);
@@ -129,7 +129,7 @@ async function main() {
 
     console.log(`✅ Found PerpetualID for ${symbolToTrade}: ${perpetualId}`);
 
-    // 6. Place a market order
+    // 8. Place a market order
     console.log("\n=== Placing Market Order ===");
     const orderResult = await sdk.placeOrder({
       symbol: symbolToTrade,
@@ -162,7 +162,7 @@ async function main() {
       }
     }
 
-    // 7. Get updated open orders after placing order
+    // 9. Get updated open orders after placing order
     console.log("\n=== Getting Updated Open Orders ===");
     const updatedOrders = await sdk.getOpenOrders();
     if (updatedOrders.status && updatedOrders.data) {
@@ -173,7 +173,7 @@ async function main() {
         );
       });
 
-      // 8. Cancel an order if there are any open orders
+      // 10. Cancel an order if there are any open orders
       if (updatedOrders.data.length > 0) {
         console.log("\n=== Cancelling Order ===");
         const orderToCancel = updatedOrders.data[0];
@@ -213,6 +213,24 @@ async function main() {
         }
       } else {
         console.log("No open orders to cancel");
+      }
+
+      // 11. Get OrderBook
+      console.log("\n=== Getting OrderBook ===");
+      const orderBook = await sdk.getOrderBook(symbolToTrade);
+      if (orderBook.status && orderBook.data) {
+        console.log("OrderBook:", orderBook.data);
+      } else {
+        console.error("Failed to get order book:", orderBook.error);
+      }
+
+      // 12. Get Ticker
+      console.log("\n=== Getting Ticker ===");
+      const ticker = await sdk.getTicker(symbolToTrade);
+      if (ticker.status && ticker.data) {
+        console.log("Ticker:", ticker.data);
+      } else {
+        console.error("Failed to get ticker:", ticker.error);
       }
     } else {
       console.error("Failed to get updated open orders:", updatedOrders.error);
