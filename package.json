@@ -1,21 +1,23 @@
 {
   "name": "dipcoin-perp-client-ts-example",
-  "version": "1.0.0",
-  "main": "index.js",
+  "version": "1.0.1",
+  "private": true,
+  "description": "Runnable examples for @dipcoinlab/perp-client-ts",
+  "license": "Apache-2.0",
   "scripts": {
     "start": "tsx test.ts",
-    "dev": "tsx test.ts"
+    "dev": "tsx test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
   "dependencies": {
-    "@dipcoinlab/perp-client-ts": "^0.5.0",
-    "dotenv": "^17.2.3"
+    "@dipcoinlab/perp-client-ts": "0.7.0",
+    "bignumber.js": "^9.2.0",
+    "dotenv": "^17.2.3",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.6",
+    "@types/ws": "^8.5.14",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3"
   }

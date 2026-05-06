@@ -10,6 +10,13 @@ import { initDipCoinPerpSDK, OrderSide, OrderType, type DipCoinPerpSDK } from "@
 
 type Network = "mainnet" | "testnet";
 
+/** WebSocket base URL aligned with DipCoin frontends (override with `WS_URL`). */
+function defaultWsUrl(network: Network): string {
+  return network === "mainnet"
+    ? "wss://gray-ws.dipcoin.io/stream/ws"
+    : "wss://demows.dipcoin.io/stream/ws";
+}
+
 // Read a boolean-like env var while allowing friendly defaults.
 const boolEnv = (key: string, fallback = false): boolean => {
   const value = process.env[key];
@@ -374,6 +381,9 @@ async function maybeRunMarginFlow(
     console.log("✅ Margin added. Tx digest:", tx?.digest ?? JSON.stringify(tx));
   }
 
+  // 睡眠 10秒
+  await new Promise((resolve) => setTimeout(resolve, 10000));
+
   if (removeFlag) {
     console.log(`Removing ${removeAmount} margin from ${symbol}`);
     const tx = await sdk.removeMargin({ symbol, amount: removeAmount });
@@ -412,13 +422,13 @@ async function maybeRunTpSlFlow(sdk: DipCoinPerpSDK, symbol: string, perpId: str
         leverage: "5",
         quantity: "0.01",
         tp: {
-          triggerPrice: "89000",
+          triggerPrice: "79000",
           orderType: OrderType.LIMIT,
-          orderPrice: "90000",
+          orderPrice: "80000",
           tpslType: "position",
         },
         sl: {
-          triggerPrice: "85000",
+          triggerPrice: "75000",
           orderType: OrderType.MARKET,
           tpslType: "position",
         },
@@ -524,6 +534,158 @@ async function maybeRunTpSlFlow(sdk: DipCoinPerpSDK, symbol: string, perpId: str
   }
 }
 
+// Global config, volumes, funding, kline, announcements, oracle & signed price feed.
+async function maybeExtendedPublicData(sdk: DipCoinPerpSDK, symbol: string, enabled: boolean) {
+  if (!enabled) {
+    console.log("ℹ️  Extended public REST demo skipped (set RUN_EXTENDED_PUBLIC=1 to enable).");
+    return;
+  }
+  logSection("Extended public market data (REST)");
+
+  const gc = await sdk.getGlobalConfig();
+  console.log("Global config:", gc.status ? JSON.stringify(gc.data).slice(0, 500) : gc.error);
+
+  const vol = await sdk.getVolumes();
+  console.log("24h volumes summary:", vol.status ? vol.data : vol.error);
+
+  const funding = await sdk.getFundingRateDetail(symbol);
+  console.log(`Funding (${symbol}):`, funding.status ? funding.data : funding.error);
+
+  const now = Math.floor(Date.now() / 1000);
+  const kl = await sdk.getKlineHistory({
+    symbol,
+    interval: stringEnv("KLINE_INTERVAL", "1h"),
+    from: now - 86400 * 3,
+    to: now,
+    countback: numberEnv("KLINE_COUNT", 5),
+  });
+  if (kl.status && kl.data?.length) {
+    console.log(`Kline (last ${kl.data.length} bars):`, kl.data);
+  } else {
+    console.log("Kline:", kl.error ?? "no data");
+  }
+
+  const ann = await sdk.getAnnouncements();
+  console.log("Announcements (count):", ann.status ? ann.data?.length : ann.error);
+
+  const notice = await sdk.getNotice();
+  console.log("Notice (count):", notice.status ? notice.data?.length : notice.error);
+
+  const signed = await sdk.getLatestSignedPriceFeed();
+  if (signed.status && signed.data) {
+    console.log("Latest signed price feed:", {
+      hasPayload: Boolean(signed.data.payload),
+      hasSignature: Boolean(signed.data.signature),
+      publicKey: signed.data.publicKey?.slice?.(0, 16),
+    });
+  } else {
+    console.log("Latest signed price feed:", signed.error);
+  }
+
+  const oracle = await sdk.getOraclePrice(symbol);
+  console.log(`Oracle price (${symbol}):`, oracle.status ? oracle.data : oracle.error);
+}
+
+// On-chain SUI / USDC / bank balances via SDK helper.
+async function maybeChainBalances(sdk: DipCoinPerpSDK, enabled: boolean) {
+  if (!enabled) {
+    console.log("ℹ️  Chain balances skipped (set RUN_CHAIN_BALANCES=1 to enable).");
+    return;
+  }
+  logSection("On-chain balances");
+  const res = await sdk.getChainBalances();
+  if (res.status && res.data) {
+    console.log(JSON.stringify(res.data, null, 2));
+  } else {
+    console.error("❌ getChainBalances:", res.error);
+  }
+}
+
+// Vault REST endpoints (read-only subset).
+async function maybeVaultRestDemo(sdk: DipCoinPerpSDK, enabled: boolean) {
+  if (!enabled) {
+    console.log("ℹ️  Vault REST demo skipped (set RUN_VAULT_REST=1 to enable).");
+    return;
+  }
+  logSection("Vault (REST snapshot)");
+
+  const ov = await sdk.getVaultOverview();
+  console.log("Overview:", ov.status ? ov.data : ov.error);
+
+  const cfg = await sdk.getVaultConfig();
+  console.log("Config:", cfg.status ? cfg.data : cfg.error);
+
+  const list = await sdk.getVaultList();
+  if (list.status && list.data?.length) {
+    console.log(`Vault list (first 3 of ${list.data.length}):`);
+    list.data.slice(0, 3).forEach((v: any) => console.log("-", v.id ?? v.vaultId, v.name ?? ""));
+  } else {
+    console.log("Vault list:", list.error ?? "empty");
+  }
+
+  const mine = await sdk.getVaultMyHoldings();
+  console.log("My vault holdings:", mine.status ? mine.data : mine.error);
+}
+
+// Recent history orders (requires auth).
+async function maybeHistoryOrders(sdk: DipCoinPerpSDK, symbol: string, enabled: boolean) {
+  if (!enabled) {
+    console.log("ℹ️  History orders skipped (set RUN_HISTORY_ORDERS=1 to enable).");
+    return;
+  }
+  logSection("Order history (first page)");
+  const res = await sdk.getHistoryOrders({
+    pageNum: 1,
+    pageSize: numberEnv("HISTORY_PAGE_SIZE", 5),
+    symbol,
+  });
+  if (res.status && res.data) {
+    console.log(`Total ~${res.data.total}, items:`, res.data.items?.length ?? 0);
+    res.data.items?.slice(0, 5).forEach((o: any) => console.log("-", o.hash ?? o.orderHash, o.side, o.status));
+  } else {
+    console.error("❌ getHistoryOrders:", res.error);
+  }
+}
+
+// Short-lived WebSocket: order book + ticker. Requires `ws` on Node < 22.
+async function maybeWsDemo(sdk: DipCoinPerpSDK, symbol: string, network: Network, enabled: boolean) {
+  if (!enabled) {
+    console.log("ℹ️  WebSocket demo skipped (set RUN_WS=1 to enable).");
+    return;
+  }
+  const wsUrl = stringEnv("WS_URL", defaultWsUrl(network));
+  logSection("WebSocket sample");
+  console.log("URL:", wsUrl, "| symbol:", symbol);
+
+  const client = sdk.createWsClient({ url: wsUrl });
+  let n = 0;
+  const max = numberEnv("WS_MAX_MESSAGES", 8);
+  const stopListening = client.onMessage((msg: unknown) => {
+    n += 1;
+    const text =
+      typeof msg === "object" && msg !== null ? JSON.stringify(msg).slice(0, 280) : String(msg);
+    console.log(`[ws ${n}/${max}]`, text);
+  });
+
+  try {
+    await client.connect();
+    client.subscribe({ channel: "orderBook", symbol });
+    client.subscribe({ channel: "ticker", symbol });
+
+    const deadline = numberEnv("WS_WAIT_MS", 6000);
+    const started = Date.now();
+    while (n < max && Date.now() - started < deadline) {
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  } catch (e) {
+    console.error("❌ WebSocket:", e);
+  } finally {
+    stopListening();
+    client.close();
+    console.log("WebSocket closed.");
+  }
+}
+
 // Entrypoint: wire up SDK, authenticate, and run demo flows.
 async function main() {
   const privateKey = process.env.PRIVATE_KEY;
@@ -535,7 +697,13 @@ async function main() {
   const network = (process.env.NETWORK as Network) || "testnet";
   const symbol = stringEnv("DEMO_SYMBOL", "BTC-PERP");
 
-  const sdk = initDipCoinPerpSDK(privateKey, { network });
+  const sdk = initDipCoinPerpSDK(privateKey, {
+    network,
+    ...(process.env.API_BASE_URL?.trim()
+      ? { apiBaseUrl: process.env.API_BASE_URL.trim() }
+      : {}),
+    ...(process.env.CUSTOM_RPC?.trim() ? { customRpc: process.env.CUSTOM_RPC.trim() } : {}),
+  });
   console.log("Wallet:", sdk.address);
   console.log("Network:", network);
   console.log("Primary symbol:", symbol);
@@ -581,13 +749,19 @@ async function main() {
     boolEnv("RUN_LIMIT_ORDER"),
     process.env.LIMIT_ORDER_QTY || "0.01",
     process.env.LIMIT_ORDER_LEVERAGE || "20",
-    process.env.LIMIT_ORDER_PRICE || "85000",
+    process.env.LIMIT_ORDER_PRICE || "75000",
     toOrderSide(process.env.LIMIT_ORDER_SIDE, OrderSide.BUY)
   );
 
   await maybeCancelFirstOrder(sdk, symbol, boolEnv("RUN_CANCEL_ORDER"));
 
   await maybeShowMarketData(sdk, symbol, boolEnv("RUN_MARKET_DATA", true));
+
+  await maybeExtendedPublicData(sdk, symbol, boolEnv("RUN_EXTENDED_PUBLIC"));
+  await maybeChainBalances(sdk, boolEnv("RUN_CHAIN_BALANCES"));
+  await maybeVaultRestDemo(sdk, boolEnv("RUN_VAULT_REST"));
+  await maybeHistoryOrders(sdk, symbol, boolEnv("RUN_HISTORY_ORDERS"));
+  await maybeWsDemo(sdk, symbol, network, boolEnv("RUN_WS"));
 
   const marginSymbol = stringEnv("MARGIN_SYMBOL", symbol);
   await showPreferredLeverage(sdk, marginSymbol);
@@ -604,7 +778,7 @@ async function main() {
     boolEnv("RUN_MARGIN_ADD"),
     boolEnv("RUN_MARGIN_REMOVE"),
     numberEnv("MARGIN_ADD_AMOUNT", 10),
-    numberEnv("MARGIN_REMOVE_AMOUNT", 5)
+    numberEnv("MARGIN_REMOVE_AMOUNT", 1)
   );
 
   await maybeRunTpSlFlow(sdk, stringEnv("TPSL_SYMBOL", symbol), perpId);
