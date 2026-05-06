@@ -34,10 +34,10 @@
   resolved "https://registry.npmjs.org/@babel/helper-validator-identifier/-/helper-validator-identifier-7.28.5.tgz#010b6938fab7cb7df74aa2bbc06aa503b8fe5fb4"
   integrity sha512-qSs4ifwzKJSV39ucNjsvc6WVHs6b7S03sOh2OcHF9UHfVPqWWALUsNUVzhSBiItjRZoLHx7nIarVjqKVusUZ1Q==
 
-"@dipcoinlab/perp-client-ts@0.7.0":
-  version "0.7.0"
-  resolved "https://registry.npmjs.org/@dipcoinlab/perp-client-ts/-/perp-client-ts-0.7.0.tgz#fd6965a5cd0a782045139472cc4aa2291ca9edc1"
-  integrity sha512-g9GSKywVsUs45BpZLLPzXrJGI9HQHYiTw+32t0XDQ+kL9cXWZ5KPGSOaETqBRWQnXiatrgVxhnu130+d1WoZQQ==
+"@dipcoinlab/perp-client-ts@^0.8.0":
+  version "0.8.0"
+  resolved "https://registry.npmjs.org/@dipcoinlab/perp-client-ts/-/perp-client-ts-0.8.0.tgz#d4ad5ffeadc11900ff61ec97afc4bdcf986a47a1"
+  integrity sha512-KItd8gWpDvCB5L24DJWlaxu2rBZN/RDVQBodTAz+P0aGs1hVSaYR3u7NCeKtPLU2WE0AJWqNsbSuwkaE3PoUMA==
   dependencies:
     "@dipcoinlab/perp-ts-library" "^0.0.30"
     "@mysten/sui" "^2.16.0"

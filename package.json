@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@dipcoinlab/perp-client-ts": "0.7.0",
+    "@dipcoinlab/perp-client-ts": "^0.8.0",
     "bignumber.js": "^9.2.0",
     "dotenv": "^17.2.3",
     "ws": "^8.18.0"

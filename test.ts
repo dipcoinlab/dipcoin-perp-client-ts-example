@@ -6,7 +6,14 @@ try {
 }
 
 import BigNumber from "bignumber.js";
-import { initDipCoinPerpSDK, OrderSide, OrderType, type DipCoinPerpSDK } from "@dipcoinlab/perp-client-ts";
+// NOTE: importing from local source so SDK fixes take effect without rebuilding `dist`.
+// Switch back to `"@dipcoinlab/perp-client-ts"` when validating the published package.
+import {
+  initDipCoinPerpSDK,
+  OrderSide,
+  OrderType,
+  type DipCoinPerpSDK,
+} from "@dipcoinlab/perp-client-ts";
 
 type Network = "mainnet" | "testnet";
 
@@ -64,6 +71,17 @@ const logSection = (title: string): void => {
   console.log(`\n${line}`);
   console.log(`=== ${title} ===`);
   console.log(`${line}`);
+};
+
+// Convert a wei (18-decimal) string returned by the perp REST APIs back to a
+// human-readable string. `getPositions` / `getOpenOrders` etc. transparently
+// pass through the backend's wei values; passing them straight into
+// `placeOrder` would double-format and trip the per-order size cap.
+const weiToNormal = (value: string | number | undefined, decimals = 18): string => {
+  if (value === undefined || value === null || value === "") return "0";
+  const bn = new BigNumber(value);
+  if (!bn.isFinite() || bn.isZero()) return "0";
+  return bn.dividedBy(new BigNumber(10).pow(decimals)).toString();
 };
 
 // Separate log sections with a visual divider.
@@ -381,7 +399,8 @@ async function maybeRunMarginFlow(
     console.log("✅ Margin added. Tx digest:", tx?.digest ?? JSON.stringify(tx));
   }
 
-  // 睡眠 10秒
+  // Sleep 10s before the matching remove call so the chain has time to index
+  // the freshly-added margin (avoids "stale object version" failures).
   await new Promise((resolve) => setTimeout(resolve, 10000));
 
   if (removeFlag) {
@@ -601,7 +620,58 @@ async function maybeChainBalances(sdk: DipCoinPerpSDK, enabled: boolean) {
   }
 }
 
-// Vault REST endpoints (read-only subset).
+// =====================================================================
+//  Vault demos
+//
+//  Mirrors the flows under `ts-frontend/src/pages/vault`:
+//   - REST snapshot (overview / config / list / my-holdings / detail)
+//   - Creator: createVault, setDepositStatus / setMaxCap / setMinDeposit
+//              / setFollowerMaxCap / setAutoCloseOnWithdraw / setTrader,
+//              updateVaultDescription, closeVault, removeVault
+//   - Follower: depositToVault, requestWithdrawFromVault, claimClosedVaultFunds
+//
+//  Each block is gated by a dedicated `RUN_VAULT_*` env flag so the
+//  script remains safe to re-run without performing real on-chain mutations
+//  unless the operator opts in explicitly.
+// =====================================================================
+
+// Resolve the vault id to operate on. Priority:
+//   1. `VAULT_ID` env var
+//   2. First entry returned by `getVaultsByCreator` for the active wallet
+//   3. First entry of `getVaultMyHoldings`
+//   4. First entry of `getVaultList`
+async function resolveVaultId(sdk: DipCoinPerpSDK): Promise<string | undefined> {
+  const fromEnv = process.env.VAULT_ID?.trim();
+  if (fromEnv) {
+    return fromEnv;
+  }
+
+  const mine = await sdk.getVaultsByCreator();
+  if (mine.status && Array.isArray(mine.data) && mine.data.length) {
+    const vid = mine.data[0]?.vaultId ?? mine.data[0]?.id;
+    if (vid) return vid;
+  }
+
+  const holdings = await sdk.getVaultMyHoldings();
+  if (holdings.status && holdings.data?.list?.length) {
+    const vid = holdings.data.list[0]?.vaultId;
+    if (vid) return vid;
+  }
+
+  const list = await sdk.getVaultList();
+  if (list.status && list.data?.length) {
+    const vid = list.data[0]?.vaultId;
+    if (vid) return vid;
+  }
+  return undefined;
+}
+
+// Format Sui transaction outputs in a uniform way.
+function logTx(label: string, tx: any) {
+  console.log(`✅ ${label} -> digest:`, tx?.digest ?? JSON.stringify(tx));
+}
+
+// REST: overview / config / list / detail / performance / my-holdings.
 async function maybeVaultRestDemo(sdk: DipCoinPerpSDK, enabled: boolean) {
   if (!enabled) {
     console.log("ℹ️  Vault REST demo skipped (set RUN_VAULT_REST=1 to enable).");
@@ -618,14 +688,588 @@ async function maybeVaultRestDemo(sdk: DipCoinPerpSDK, enabled: boolean) {
   const list = await sdk.getVaultList();
   if (list.status && list.data?.length) {
     console.log(`Vault list (first 3 of ${list.data.length}):`);
-    list.data.slice(0, 3).forEach((v: any) => console.log("-", v.id ?? v.vaultId, v.name ?? ""));
+    list.data.slice(0, 3).forEach((v: any) =>
+      console.log(`- ${v.vaultId ?? v.id} | ${v.name ?? "<unnamed>"} | tvl=${v.tvl} apr=${v.apr}`)
+    );
   } else {
     console.log("Vault list:", list.error ?? "empty");
   }
 
-  const mine = await sdk.getVaultMyHoldings();
-  console.log("My vault holdings:", mine.status ? mine.data : mine.error);
+  const mineCreated = await sdk.getVaultsByCreator();
+  if (mineCreated.status && Array.isArray(mineCreated.data) && mineCreated.data.length) {
+    console.log(`Vaults created by me: ${mineCreated.data.length}`);
+    mineCreated.data
+      .slice(0, 3)
+      .forEach((v: any) => console.log(`- ${v.vaultId ?? v.id} | ${v.name ?? "<unnamed>"}`));
+  } else {
+    console.log("Vaults created by me:", mineCreated.error ?? "none");
+  }
+
+  const holdings = await sdk.getVaultMyHoldings();
+  console.log("My vault holdings:", holdings.status ? holdings.data : holdings.error);
+
+  const vaultId = await resolveVaultId(sdk);
+  if (!vaultId) {
+    console.log("ℹ️  No VAULT_ID resolved – skipping per-vault drilldown.");
+    return;
+  }
+  console.log(`\nUsing VAULT_ID=${vaultId} for drilldown sections`);
+
+  const detail = await sdk.getVaultDetail(vaultId);
+  console.log("Detail:", detail.status ? detail.data : detail.error);
+
+  const perf = await sdk.getVaultPerformance(vaultId);
+  console.log("Performance:", perf.status ? perf.data : perf.error);
+
+  const account = await sdk.getVaultAccount(vaultId);
+  console.log("Account:", account.status ? account.data : account.error);
+
+  const myPerf = await sdk.getVaultMyPerformance(vaultId);
+  console.log("My performance in this vault:", myPerf.status ? myPerf.data : myPerf.error);
 }
+
+// Creator: create a fresh vault. Mirrors `CreateVaultLayer` parameters.
+async function maybeVaultCreate(sdk: DipCoinPerpSDK, enabled: boolean) {
+  if (!enabled) {
+    console.log("ℹ️  Vault creation skipped (set RUN_VAULT_CREATE=1 to enable).");
+    return;
+  }
+  logSection("Vault create");
+
+  const name = stringEnv("VAULT_NAME", `demo-vault-${Date.now()}`);
+  const trader = stringEnv("VAULT_TRADER", sdk.address);
+  const maxCap = stringEnv("VAULT_MAX_CAP", "100000");
+  const minDepositAmount = stringEnv("VAULT_MIN_DEPOSIT", "10");
+  const profitShare = stringEnv("VAULT_PROFIT_SHARE", "0.2");
+  const creatorMinimumShareRatio = stringEnv("VAULT_CREATOR_MIN_RATIO", "0.05");
+  const initialAmount = stringEnv("VAULT_INITIAL_DEPOSIT", "100");
+
+  console.log(
+    `Creating vault "${name}" trader=${trader} initial=${initialAmount} USDC maxCap=${maxCap}`
+  );
+  try {
+    const tx = await sdk.createVault({
+      name,
+      trader,
+      maxCap,
+      minDepositAmount,
+      creatorProfitShareRatio: profitShare,
+      creatorMinimumShareRatio,
+      initialAmount,
+    });
+    logTx("Vault created", tx);
+  } catch (e: any) {
+    console.error("❌ createVault failed:", e?.message ?? e);
+  }
+}
+
+// Creator: apply per-setting toggles. Each is independently gated.
+async function maybeVaultCreatorAdmin(sdk: DipCoinPerpSDK) {
+  const flags = {
+    setDepositStatus: boolEnv("RUN_VAULT_SET_DEPOSIT_STATUS"),
+    setMaxCap: boolEnv("RUN_VAULT_SET_MAX_CAP"),
+    setMinDeposit: boolEnv("RUN_VAULT_SET_MIN_DEPOSIT"),
+    setFollowerMaxCap: boolEnv("RUN_VAULT_SET_FOLLOWER_MAX_CAP"),
+    setAutoClose: boolEnv("RUN_VAULT_SET_AUTO_CLOSE"),
+    setTrader: boolEnv("RUN_VAULT_SET_TRADER"),
+    updateDescription: boolEnv("RUN_VAULT_UPDATE_DESCRIPTION"),
+  };
+  const anyEnabled = Object.values(flags).some(Boolean);
+  if (!anyEnabled) {
+    console.log("ℹ️  Vault creator admin skipped (set any RUN_VAULT_SET_* / RUN_VAULT_UPDATE_DESCRIPTION).");
+    return;
+  }
+
+  const vaultId = await resolveVaultId(sdk);
+  if (!vaultId) {
+    console.error("❌ Cannot run creator admin demo: VAULT_ID not set and no creator vault found.");
+    return;
+  }
+
+  logSection(`Vault creator admin (${vaultId})`);
+
+  if (flags.setDepositStatus) {
+    const status = boolEnv("VAULT_DEPOSIT_STATUS", true);
+    console.log(`Setting deposit status -> ${status}`);
+    try {
+      const tx = await sdk.setVaultDepositStatus({ vaultId, status });
+      logTx("setVaultDepositStatus", tx);
+    } catch (e: any) {
+      console.error("❌ setVaultDepositStatus failed:", e?.message ?? e);
+    }
+  }
+
+  // NB: contract enforces follower_max_cap <= vault.max_cap, so always update
+  // max cap before follower max cap (matches `ModifyMinDepositLayer` ordering).
+  if (flags.setMaxCap) {
+    const maxCap = stringEnv("VAULT_MAX_CAP", "200000");
+    console.log(`Setting max cap -> ${maxCap}`);
+    try {
+      const tx = await sdk.setVaultMaxCap({ vaultId, maxCap });
+      logTx("setVaultMaxCap", tx);
+    } catch (e: any) {
+      console.error("❌ setVaultMaxCap failed:", e?.message ?? e);
+    }
+  }
+
+  if (flags.setMinDeposit) {
+    const minDepositAmount = stringEnv("VAULT_MIN_DEPOSIT", "10");
+    console.log(`Setting min deposit -> ${minDepositAmount}`);
+    try {
+      const tx = await sdk.setVaultMinDepositAmount({ vaultId, minDepositAmount });
+      logTx("setVaultMinDepositAmount", tx);
+    } catch (e: any) {
+      console.error("❌ setVaultMinDepositAmount failed:", e?.message ?? e);
+    }
+  }
+
+  if (flags.setFollowerMaxCap) {
+    const followerMaxCap = stringEnv("VAULT_FOLLOWER_MAX_CAP", "10000");
+    console.log(`Setting follower max cap -> ${followerMaxCap}`);
+    try {
+      const tx = await sdk.setVaultFollowerMaxCap({ vaultId, followerMaxCap });
+      logTx("setVaultFollowerMaxCap", tx);
+    } catch (e: any) {
+      console.error("❌ setVaultFollowerMaxCap failed:", e?.message ?? e);
+    }
+  }
+
+  if (flags.setAutoClose) {
+    const autoCloseOnWithdraw = boolEnv("VAULT_AUTO_CLOSE_ON_WITHDRAW", false);
+    console.log(`Setting auto-close-on-withdraw -> ${autoCloseOnWithdraw}`);
+    try {
+      const tx = await sdk.setVaultAutoCloseOnWithdraw({ vaultId, autoCloseOnWithdraw });
+      logTx("setVaultAutoCloseOnWithdraw", tx);
+    } catch (e: any) {
+      console.error("❌ setVaultAutoCloseOnWithdraw failed:", e?.message ?? e);
+    }
+  }
+
+  if (flags.setTrader) {
+    const newTrader = stringEnv("VAULT_NEW_TRADER", sdk.address);
+    console.log(`Setting trader -> ${newTrader}`);
+    try {
+      const tx = await sdk.setVaultTrader({ vaultId, newTrader });
+      logTx("setVaultTrader", tx);
+    } catch (e: any) {
+      console.error("❌ setVaultTrader failed:", e?.message ?? e);
+    }
+  }
+
+  if (flags.updateDescription) {
+    const description = stringEnv("VAULT_DESCRIPTION", "Updated via SDK demo");
+    console.log(`Updating description on vault ${vaultId}`);
+    const res = await sdk.updateVaultDescription({ vaultId, description });
+    if (res.status) {
+      console.log("✅ updateVaultDescription:", res.data ?? "OK");
+    } else {
+      console.error("❌ updateVaultDescription:", res.error);
+    }
+  }
+}
+
+// Follower: deposit USDC into a vault.
+async function maybeVaultDeposit(sdk: DipCoinPerpSDK, enabled: boolean) {
+  if (!enabled) {
+    console.log("ℹ️  Vault deposit skipped (set RUN_VAULT_DEPOSIT=1 to enable).");
+    return;
+  }
+  const vaultId = await resolveVaultId(sdk);
+  if (!vaultId) {
+    console.error("❌ Cannot deposit: no VAULT_ID resolved.");
+    return;
+  }
+  const amount = stringEnv("VAULT_DEPOSIT_AMOUNT", "10");
+  logSection(`Vault deposit (${vaultId})`);
+  console.log(`Depositing ${amount} USDC into vault ${vaultId}`);
+  try {
+    const tx = await sdk.depositToVault({ vaultId, amount });
+    logTx("depositToVault", tx);
+  } catch (e: any) {
+    console.error("❌ depositToVault failed:", e?.message ?? e);
+  }
+}
+
+// Follower: request withdrawal of vault shares.
+//
+// The vault contract redeems by share count (not USDC amount). We mirror
+// `WithdrawFromVaultLayer` and convert the env-provided USDC amount to
+// shares via `navps`. Set `VAULT_WITHDRAW_MAX=1` to redeem the full balance.
+async function maybeVaultWithdraw(sdk: DipCoinPerpSDK, enabled: boolean) {
+  if (!enabled) {
+    console.log("ℹ️  Vault withdraw skipped (set RUN_VAULT_WITHDRAW=1 to enable).");
+    return;
+  }
+  const vaultId = await resolveVaultId(sdk);
+  if (!vaultId) {
+    console.error("❌ Cannot withdraw: no VAULT_ID resolved.");
+    return;
+  }
+
+  logSection(`Vault withdraw (${vaultId})`);
+  const [myPerf, vaultCfg] = await Promise.all([
+    sdk.getVaultMyPerformance(vaultId),
+    sdk.getVaultConfig(),
+  ]);
+  if (!myPerf.status || !myPerf.data) {
+    console.error("❌ Cannot read my vault performance:", myPerf.error);
+    return;
+  }
+  const { shares: ownedShares, navps, myBalance, lastDepositTimeMs } = myPerf.data;
+  console.log(`My balance: ${myBalance} USDC | shares: ${ownedShares} | navps: ${navps}`);
+
+  // Mirror frontend `WithdrawFromVaultLayer` lock-period warning. Avoids
+  // burning gas on the inevitable MoveAbort 2038 when called too eagerly.
+  const lockPeriodMs = Number(vaultCfg.data?.lockPeriodMs ?? 0);
+  const lastDeposit = Number(lastDepositTimeMs ?? 0);
+  if (lockPeriodMs && lastDeposit) {
+    const elapsed = Date.now() - lastDeposit;
+    if (elapsed < lockPeriodMs) {
+      const unlockAt = new Date(lastDeposit + lockPeriodMs);
+      const remainingSec = Math.ceil((lockPeriodMs - elapsed) / 1000);
+      console.log(
+        `⏳ Withdrawal is still locked. Last deposit ${new Date(
+          lastDeposit
+        ).toISOString()}, unlocks at ${unlockAt.toISOString()} (~${remainingSec}s left).`
+      );
+      console.log(
+        "   Set VAULT_WITHDRAW_SKIP_LOCK=1 to attempt the call anyway (will hit MoveAbort 2038)."
+      );
+      if (!boolEnv("VAULT_WITHDRAW_SKIP_LOCK")) {
+        return;
+      }
+    }
+  }
+
+  let shares: string;
+  if (boolEnv("VAULT_WITHDRAW_MAX")) {
+    shares = ownedShares;
+  } else {
+    const amount = stringEnv("VAULT_WITHDRAW_AMOUNT", "1");
+    const navpsBn = new BigNumber(navps || "0");
+    if (navpsBn.isZero()) {
+      console.error("❌ navps is zero – cannot convert USDC -> shares.");
+      return;
+    }
+    shares = new BigNumber(amount).dividedBy(navpsBn).toString(10);
+    console.log(`Converted ${amount} USDC -> ${shares} shares (navps=${navps})`);
+  }
+
+  if (!shares || new BigNumber(shares).isZero()) {
+    console.log("ℹ️  No shares to redeem; skipping.");
+    return;
+  }
+
+  try {
+    const tx = await sdk.requestWithdrawFromVault({
+      vaultId,
+      shares,
+      skipLockCheck: boolEnv("VAULT_WITHDRAW_SKIP_LOCK"),
+    });
+    logTx("requestWithdrawFromVault", tx);
+  } catch (e: any) {
+    console.error("❌ requestWithdrawFromVault failed:", e?.message ?? e);
+  }
+}
+
+// Follower: claim USDC after the vault is closed.
+async function maybeVaultClaimClosed(sdk: DipCoinPerpSDK, enabled: boolean) {
+  if (!enabled) {
+    console.log("ℹ️  Vault claim-closed skipped (set RUN_VAULT_CLAIM_CLOSED=1 to enable).");
+    return;
+  }
+  const vaultId = await resolveVaultId(sdk);
+  if (!vaultId) {
+    console.error("❌ Cannot claim: no VAULT_ID resolved.");
+    return;
+  }
+  logSection(`Vault claim closed funds (${vaultId})`);
+  try {
+    const tx = await sdk.claimClosedVaultFunds({ vaultId });
+    logTx("claimClosedVaultFunds", tx);
+  } catch (e: any) {
+    console.error("❌ claimClosedVaultFunds failed:", e?.message ?? e);
+  }
+}
+
+// Operator / creator: settle outstanding withdrawal requests after NAV update.
+async function maybeVaultFillWithdrawals(sdk: DipCoinPerpSDK, enabled: boolean) {
+  if (!enabled) {
+    console.log("ℹ️  Vault fill-withdrawals skipped (set RUN_VAULT_FILL_WITHDRAW=1 to enable).");
+    return;
+  }
+  const vaultId = await resolveVaultId(sdk);
+  if (!vaultId) {
+    console.error("❌ Cannot fill withdrawals: no VAULT_ID resolved.");
+    return;
+  }
+  const ids = stringEnv("VAULT_WITHDRAW_REQUEST_IDS", "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!ids.length) {
+    console.error("❌ Set VAULT_WITHDRAW_REQUEST_IDS=<comma-separated request IDs> to fill.");
+    return;
+  }
+  logSection(`Vault fill withdrawal requests (${vaultId})`);
+  try {
+    const tx = await sdk.fillVaultWithdrawalRequests({
+      vaultId,
+      withdrawalRequestIds: ids,
+    });
+    logTx("fillVaultWithdrawalRequests", tx);
+  } catch (e: any) {
+    console.error("❌ fillVaultWithdrawalRequests failed:", e?.message ?? e);
+  }
+}
+
+// Creator: close a vault. Destructive – requires explicit opt-in.
+async function maybeVaultClose(sdk: DipCoinPerpSDK, enabled: boolean) {
+  if (!enabled) {
+    console.log("ℹ️  Vault close skipped (set RUN_VAULT_CLOSE=1 to enable).");
+    return;
+  }
+  const vaultId = await resolveVaultId(sdk);
+  if (!vaultId) {
+    console.error("❌ Cannot close: no VAULT_ID resolved.");
+    return;
+  }
+  logSection(`Vault close (${vaultId})`);
+  try {
+    const tx = await sdk.closeVault({ vaultId });
+    logTx("closeVault", tx);
+  } catch (e: any) {
+    console.error("❌ closeVault failed:", e?.message ?? e);
+  }
+}
+
+// Creator: remove a vault record after it has been closed and drained.
+async function maybeVaultRemove(sdk: DipCoinPerpSDK, enabled: boolean) {
+  if (!enabled) {
+    console.log("ℹ️  Vault remove skipped (set RUN_VAULT_REMOVE=1 to enable).");
+    return;
+  }
+  const vaultId = await resolveVaultId(sdk);
+  if (!vaultId) {
+    console.error("❌ Cannot remove: no VAULT_ID resolved.");
+    return;
+  }
+  logSection(`Vault remove (${vaultId})`);
+  try {
+    const tx = await sdk.removeVault({ vaultId });
+    logTx("removeVault", tx);
+  } catch (e: any) {
+    console.error("❌ removeVault failed:", e?.message ?? e);
+  }
+}
+
+// =====================================================================
+//  Vault perp trading (creator / trader acts on behalf of a vault)
+//
+//  Mirrors `ts-frontend/src/pages/perp` flows when `selectedAccount` is
+//  the vault: every trading call accepts `parentAddress = <vaultId>`.
+// =====================================================================
+async function maybeVaultPerpTrading(sdk: DipCoinPerpSDK) {
+  const flags = {
+    snapshot: boolEnv("RUN_VAULT_PERP_SNAPSHOT"),
+    setLeverage: boolEnv("RUN_VAULT_PERP_SET_LEVERAGE"),
+    market: boolEnv("RUN_VAULT_PERP_MARKET_ORDER"),
+    limit: boolEnv("RUN_VAULT_PERP_LIMIT_ORDER"),
+    cancel: boolEnv("RUN_VAULT_PERP_CANCEL"),
+    addMargin: boolEnv("RUN_VAULT_PERP_ADD_MARGIN"),
+    removeMargin: boolEnv("RUN_VAULT_PERP_REMOVE_MARGIN"),
+    closePosition: boolEnv("RUN_VAULT_PERP_CLOSE_POSITION"),
+  };
+  if (!Object.values(flags).some(Boolean)) {
+    console.log(
+      "ℹ️  Vault perp trading skipped (set any RUN_VAULT_PERP_* flag to enable)."
+    );
+    return;
+  }
+
+  const vaultId = await resolveVaultId(sdk);
+  if (!vaultId) {
+    console.error("❌ Cannot run vault perp demo: no VAULT_ID resolved.");
+    return;
+  }
+  logSection(`Vault perp trading (parentAddress=${vaultId})`);
+
+  const symbol = stringEnv("VAULT_PERP_SYMBOL", stringEnv("DEMO_SYMBOL", "BTC-PERP"));
+  const perpId = await sdk.getPerpetualID(symbol);
+  if (!perpId) {
+    console.error(`❌ Cannot resolve PerpetualID for ${symbol}; aborting.`);
+    return;
+  }
+
+  if (flags.snapshot) {
+    const [accountInfo, positions, openOrders] = await Promise.all([
+      sdk.getAccountInfo(vaultId),
+      sdk.getPositions(symbol, vaultId),
+      sdk.getOpenOrders(symbol, vaultId),
+    ]);
+    console.log("Vault account info:", accountInfo.status ? accountInfo.data : accountInfo.error);
+    if (positions.status && positions.data?.length) {
+      positions.data.forEach((p) =>
+        console.log(
+          `- pos ${p.symbol} ${p.side} qty=${weiToNormal(p.quantity)} entry=${weiToNormal(p.avgEntryPrice)} lev=${weiToNormal(p.leverage)}`
+        )
+      );
+    } else {
+      console.log("Vault positions:", positions.error ?? "none");
+    }
+    if (openOrders.status && openOrders.data?.length) {
+      openOrders.data.forEach((o) =>
+        console.log(
+          `- open ${o.symbol} ${o.side} ${o.orderType} qty=${weiToNormal(o.quantity)} px=${weiToNormal(o.price)} hash=${o.hash}`
+        )
+      );
+    } else {
+      console.log("Vault open orders:", openOrders.error ?? "none");
+    }
+  }
+
+  if (flags.setLeverage) {
+    const leverage = stringEnv("VAULT_PERP_TARGET_LEVERAGE", "10");
+    console.log(`Setting vault leverage on ${symbol} -> ${leverage}x`);
+    const res = await sdk.adjustLeverage({
+      symbol,
+      leverage,
+      marginType: stringEnv("VAULT_PERP_MARGIN_TYPE", "ISOLATED"),
+      parentAddress: vaultId,
+    });
+    if (res.status) {
+      console.log("✅ adjustLeverage:", res.data?.message ?? "OK");
+    } else {
+      console.error("❌ adjustLeverage:", res.error);
+    }
+  }
+
+  if (flags.market) {
+    const qty = stringEnv("VAULT_PERP_MARKET_QTY", "0.01");
+    const lev = stringEnv("VAULT_PERP_MARKET_LEVERAGE", "10");
+    const side = toOrderSide(process.env.VAULT_PERP_MARKET_SIDE, OrderSide.BUY);
+    console.log(`Vault MARKET ${side} qty=${qty} lev=${lev} on ${symbol}`);
+    const res = await sdk.placeOrder({
+      symbol,
+      market: perpId,
+      orderType: OrderType.MARKET,
+      side,
+      quantity: qty,
+      leverage: lev,
+      parentAddress: vaultId,
+    });
+    if (res.status) {
+      console.log("✅ Vault market order:", res.data?.message ?? "OK");
+    } else {
+      console.error("❌ Vault market order:", res.error);
+    }
+  }
+
+  if (flags.limit) {
+    const qty = stringEnv("VAULT_PERP_LIMIT_QTY", "0.01");
+    const lev = stringEnv("VAULT_PERP_LIMIT_LEVERAGE", "10");
+    const price = stringEnv("VAULT_PERP_LIMIT_PRICE", "75000");
+    const side = toOrderSide(process.env.VAULT_PERP_LIMIT_SIDE, OrderSide.BUY);
+    console.log(`Vault LIMIT ${side} qty=${qty} px=${price} lev=${lev} on ${symbol}`);
+    const res = await sdk.placeOrder({
+      symbol,
+      market: perpId,
+      orderType: OrderType.LIMIT,
+      side,
+      quantity: qty,
+      price,
+      leverage: lev,
+      parentAddress: vaultId,
+    });
+    if (res.status) {
+      console.log("✅ Vault limit order:", res.data?.message ?? "OK");
+    } else {
+      console.error("❌ Vault limit order:", res.error);
+    }
+  }
+
+  if (flags.cancel) {
+    const openOrders = await sdk.getOpenOrders(symbol, vaultId);
+    const target = openOrders.status ? openOrders.data?.[0] : undefined;
+    if (!target) {
+      console.log("ℹ️  Vault has no open orders to cancel.");
+    } else {
+      console.log(
+        `Cancelling vault order ${target.hash} (${target.side} ${target.orderType} qty=${weiToNormal(target.quantity)})`
+      );
+      const res = await sdk.cancelOrder({
+        symbol,
+        orderHashes: [target.hash!],
+        parentAddress: vaultId,
+      });
+      if (res.status) {
+        console.log("✅ Vault order cancelled.");
+      } else {
+        console.error("❌ Vault cancelOrder:", res.error);
+      }
+    }
+  }
+
+  if (flags.addMargin) {
+    const amount = numberEnv("VAULT_PERP_MARGIN_ADD", 1);
+    console.log(`Adding ${amount} USDC margin to vault position on ${symbol}`);
+    try {
+      const tx = await sdk.addMargin({ symbol, amount, parentAddress: vaultId });
+      logTx("vault addMargin", tx);
+    } catch (e: any) {
+      console.error("❌ vault addMargin:", e?.message ?? e);
+    }
+  }
+
+  if (flags.removeMargin) {
+    const amount = numberEnv("VAULT_PERP_MARGIN_REMOVE", 1);
+    console.log(`Removing ${amount} USDC margin from vault position on ${symbol}`);
+    try {
+      const tx = await sdk.removeMargin({ symbol, amount, parentAddress: vaultId });
+      logTx("vault removeMargin", tx);
+    } catch (e: any) {
+      console.error("❌ vault removeMargin:", e?.message ?? e);
+    }
+  }
+
+  if (flags.closePosition) {
+    const positions = await sdk.getPositions(symbol, vaultId);
+    const target = positions.status ? positions.data?.[0] : undefined;
+    if (!target) {
+      console.log("ℹ️  Vault has no positions to close.");
+    } else {
+      // `Position.quantity` / `Position.leverage` are wei strings (18 decimals)
+      // straight from the REST API – `placeOrder` will re-`formatNormalToWei`
+      // them, so feed in the normal-unit version. Without this the backend
+      // sees ~1e15 BTC and rejects with the per-order size cap.
+      const positionQty = weiToNormal(target.quantity);
+      const positionLeverage = weiToNormal(target.leverage) || "10";
+      const closeQty = stringEnv("VAULT_PERP_CLOSE_QTY", positionQty);
+      // reduceOnly + opposite side closes the position. Mirrors `ClosePositionModal`.
+      const closeSide = target.side === "BUY" ? OrderSide.SELL : OrderSide.BUY;
+      console.log(
+        `Closing vault position on ${symbol} (current ${target.side} qty=${positionQty} lev=${positionLeverage}) closing qty=${closeQty}`
+      );
+      const res = await sdk.placeOrder({
+        symbol,
+        market: perpId,
+        orderType: OrderType.MARKET,
+        side: closeSide,
+        quantity: closeQty,
+        leverage: positionLeverage,
+        reduceOnly: true,
+        parentAddress: vaultId,
+      });
+      if (res.status) {
+        console.log("✅ Vault closePosition:", res.data?.message ?? "OK");
+      } else {
+        console.error("❌ Vault closePosition:", res.error);
+      }
+    }
+  }
+}
+
+
 
 // Recent history orders (requires auth).
 async function maybeHistoryOrders(sdk: DipCoinPerpSDK, symbol: string, enabled: boolean) {
@@ -713,8 +1357,8 @@ async function main() {
     process.exit(1);
   }
 
-  await maybeDeposit(sdk, boolEnv("RUN_DEPOSIT"), numberEnv("DEPOSIT_AMOUNT", 10));
-  await maybeWithdraw(sdk, boolEnv("RUN_WITHDRAW"), numberEnv("WITHDRAW_AMOUNT", 5));
+  // Wallet snapshot + perpId resolution first; these provide context for
+  // every flag-gated section below.
   await showAccountSnapshot(sdk, symbol);
   printDivider();
 
@@ -731,6 +1375,13 @@ async function main() {
   }
 
   perpId = await fetchPerpId(sdk, symbol, perpId);
+
+  // The following sections mirror the order of the matching RUN_* flags in
+  // `.env` so the demo executes top-to-bottom in the same shape as the file.
+
+  // ---- Bank / orders / margin ----
+  await maybeDeposit(sdk, boolEnv("RUN_DEPOSIT"), numberEnv("DEPOSIT_AMOUNT", 10));
+  await maybeWithdraw(sdk, boolEnv("RUN_WITHDRAW"), numberEnv("WITHDRAW_AMOUNT", 5));
 
   await maybePlaceMarketOrder(
     sdk,
@@ -755,14 +1406,6 @@ async function main() {
 
   await maybeCancelFirstOrder(sdk, symbol, boolEnv("RUN_CANCEL_ORDER"));
 
-  await maybeShowMarketData(sdk, symbol, boolEnv("RUN_MARKET_DATA", true));
-
-  await maybeExtendedPublicData(sdk, symbol, boolEnv("RUN_EXTENDED_PUBLIC"));
-  await maybeChainBalances(sdk, boolEnv("RUN_CHAIN_BALANCES"));
-  await maybeVaultRestDemo(sdk, boolEnv("RUN_VAULT_REST"));
-  await maybeHistoryOrders(sdk, symbol, boolEnv("RUN_HISTORY_ORDERS"));
-  await maybeWsDemo(sdk, symbol, network, boolEnv("RUN_WS"));
-
   const marginSymbol = stringEnv("MARGIN_SYMBOL", symbol);
   await showPreferredLeverage(sdk, marginSymbol);
   await maybeAdjustPreferredLeverage(
@@ -782,6 +1425,35 @@ async function main() {
   );
 
   await maybeRunTpSlFlow(sdk, stringEnv("TPSL_SYMBOL", symbol), perpId);
+
+  // ---- Auxiliary data sections (not enumerated in `.env`) ----
+  await maybeShowMarketData(sdk, symbol, boolEnv("RUN_MARKET_DATA", true));
+  await maybeExtendedPublicData(sdk, symbol, boolEnv("RUN_EXTENDED_PUBLIC"));
+  await maybeChainBalances(sdk, boolEnv("RUN_CHAIN_BALANCES"));
+  await maybeHistoryOrders(sdk, symbol, boolEnv("RUN_HISTORY_ORDERS"));
+  await maybeWsDemo(sdk, symbol, network, boolEnv("RUN_WS"));
+
+  // ---- Vault: REST snapshot ----
+  await maybeVaultRestDemo(sdk, boolEnv("RUN_VAULT_REST"));
+
+  // ---- Vault: creator lifecycle ----
+  await maybeVaultCreate(sdk, boolEnv("RUN_VAULT_CREATE"));
+
+  // ---- Vault: creator settings ----
+  await maybeVaultCreatorAdmin(sdk);
+
+  // ---- Vault: follower flows ----
+  await maybeVaultDeposit(sdk, boolEnv("RUN_VAULT_DEPOSIT"));
+  await maybeVaultWithdraw(sdk, boolEnv("RUN_VAULT_WITHDRAW"));
+  await maybeVaultClaimClosed(sdk, boolEnv("RUN_VAULT_CLAIM_CLOSED"));
+
+  // ---- Vault: operator / destructive ----
+  await maybeVaultFillWithdrawals(sdk, boolEnv("RUN_VAULT_FILL_WITHDRAW"));
+  await maybeVaultClose(sdk, boolEnv("RUN_VAULT_CLOSE"));
+  await maybeVaultRemove(sdk, boolEnv("RUN_VAULT_REMOVE"));
+
+  // ---- Vault: creator/trader trades on behalf of the vault (parentAddress) ----
+  await maybeVaultPerpTrading(sdk);
 
   printDivider();
   console.log("🎉 Demo complete. Enable additional sections via env flags as needed.");
