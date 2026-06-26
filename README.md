@@ -42,6 +42,39 @@ Optional:
 
 See `.env.example` and the table below for the full set of toggles.
 
+> **Local source resolution:** `tsconfig.json` maps `@dipcoinlab/perp-client-ts`
+> to the sibling SDK source (`../dipcoin-perp-client-ts/src/index.ts`) so SDK
+> changes take effect via `tsx` / `tsc` without rebuilding `dist`. Remove the
+> `paths` entry to validate the published package instead.
+
+## Solana (CCTP) support
+
+The SDK can sign for a **Solana** wallet. Because Solana wallets cannot pay Sui
+gas, deposits bridge USDC through **Circle CCTP** and withdrawals are submitted
+to the DipCoin **relayer**; trading/order payloads are signed with the Solana
+Ed25519 key. Enable it via `CHAIN=solana`:
+
+```bash
+CHAIN=solana
+SOLANA_PRIVATE_KEY=...        # base58 / hex / JSON byte array (Phantom export works)
+# SOLANA_RPC_URL=...          # optional RPC override
+RUN_SOLANA_DEPOSIT=0          # bridge USDC: Solana -> Sui Bank (CCTP)
+SOLANA_DEPOSIT_AMOUNT=10
+RUN_SOLANA_WITHDRAW=0         # withdraw: Sui Bank -> Solana wallet (relayer)
+SOLANA_WITHDRAW_AMOUNT=5
+```
+
+With `CHAIN=solana` the demo prints balances (SOL + Solana USDC + Sui Bank),
+runs the opt-in CCTP deposit / relayer withdraw, and can place chain-aware
+orders (`RUN_MARKET_ORDER` / `RUN_LIMIT_ORDER`). Programmatic entry points:
+
+```ts
+const sdk = initDipCoinPerpSDK(SOLANA_PRIVATE_KEY, { chain: "solana", network: "testnet" });
+await sdk.authenticate();
+await sdk.depositToBankFromSolana({ amount: 10 });   // CCTP deposit
+await sdk.withdrawFromBankToSolana({ amount: 5 });   // relayer withdraw
+```
+
 ## Run
 
 ```bash
@@ -61,7 +94,12 @@ yarn typecheck
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `PRIVATE_KEY` | Wallet private key (**required**) | — |
+| `PRIVATE_KEY` | Wallet private key (**required** for `CHAIN=sui`) | — |
+| `CHAIN` | `sui` / `solana` | `sui` |
+| `SOLANA_PRIVATE_KEY` | Solana key (required for `CHAIN=solana`; falls back to `PRIVATE_KEY`) | — |
+| `SOLANA_RPC_URL` | Optional Solana RPC override | SDK default |
+| `RUN_SOLANA_DEPOSIT` / `SOLANA_DEPOSIT_AMOUNT` | CCTP deposit Solana → Sui Bank | `0` / `10` |
+| `RUN_SOLANA_WITHDRAW` / `SOLANA_WITHDRAW_AMOUNT` | Relayer withdraw Sui Bank → Solana | `0` / `5` |
 | `NETWORK` | `mainnet` / `testnet` | `testnet` |
 | `DEMO_SYMBOL` | Primary trading symbol, e.g. `BTC-PERP` | `BTC-PERP` |
 | `API_BASE_URL` / `CUSTOM_RPC` | Optional REST / RPC overrides | SDK defaults |

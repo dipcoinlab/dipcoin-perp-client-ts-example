@@ -1331,14 +1331,135 @@ async function maybeWsDemo(sdk: DipCoinPerpSDK, symbol: string, network: Network
 }
 
 // Entrypoint: wire up SDK, authenticate, and run demo flows.
+// ---------------------------------------------------------------------------
+//  Solana (CCTP + relayer) demo
+// ---------------------------------------------------------------------------
+
+// Bridge USDC from Solana into the DipCoin Sui Bank via Circle CCTP.
+async function maybeSolanaDeposit(sdk: DipCoinPerpSDK, enabled: boolean, amount: number) {
+  logSection("Solana CCTP Deposit (Solana USDC -> Sui Bank)");
+  if (!enabled) {
+    console.log("ℹ️  Skipping Solana deposit (set RUN_SOLANA_DEPOSIT=1 to enable).");
+    return;
+  }
+  try {
+    console.log(`Bridging ${amount} USDC from Solana to the Sui Bank...`);
+    const res = await sdk.depositToBankFromSolana({ amount, waitForSui: true });
+    console.log("✅ Solana burn tx:", res.solanaTxHash);
+    if (res.suiTxHash) {
+      console.log("✅ Sui receive digest:", res.suiTxHash);
+    }
+  } catch (error) {
+    console.error("❌ Solana deposit failed:", error instanceof Error ? error.message : error);
+  }
+}
+
+// Withdraw USDC from the DipCoin Sui Bank back to the Solana wallet via the relayer.
+async function maybeSolanaWithdraw(sdk: DipCoinPerpSDK, enabled: boolean, amount: number) {
+  logSection("Solana Withdraw (Sui Bank -> Solana wallet via relayer)");
+  if (!enabled) {
+    console.log("ℹ️  Skipping Solana withdraw (set RUN_SOLANA_WITHDRAW=1 to enable).");
+    return;
+  }
+  try {
+    console.log(`Withdrawing ${amount} USDC from the Sui Bank to Solana...`);
+    const res = await sdk.withdrawFromBankToSolana({ amount, waitForSolana: false });
+    console.log("✅ Relayer Sui tx digest:", res.suiTxHash);
+    if (res.solanaTxHash) {
+      console.log("✅ Solana mint tx:", res.solanaTxHash);
+    }
+  } catch (error) {
+    console.error("❌ Solana withdraw failed:", error instanceof Error ? error.message : error);
+  }
+}
+
+// Full Solana demo: balances, CCTP deposit/withdraw, and chain-aware trading.
+// Solana wallets cannot pay Sui gas, so deposits go through CCTP and withdraws
+// through the relayer, while order signing uses the Solana Ed25519 key.
+async function runSolanaDemo(privateKey: string, network: Network) {
+  const symbol = stringEnv("DEMO_SYMBOL", "BTC-PERP");
+
+  const sdk = initDipCoinPerpSDK(privateKey, {
+    chain: "solana",
+    network,
+    ...(process.env.API_BASE_URL?.trim() ? { apiBaseUrl: process.env.API_BASE_URL.trim() } : {}),
+    ...(process.env.SOLANA_RPC_URL?.trim()
+      ? { solanaRpcUrl: process.env.SOLANA_RPC_URL.trim() }
+      : {}),
+  });
+
+  console.log("Chain:", sdk.chainKind);
+  console.log("Solana wallet (base58):", sdk.address);
+  console.log("Unified Sui-format identity:", sdk.onChainAddress);
+  console.log("Network:", network);
+  console.log("Primary symbol:", symbol);
+
+  const authed = await authenticate(sdk);
+  if (!authed) {
+    process.exit(1);
+  }
+
+  // Balances: native SOL + Solana USDC + Sui Bank balance.
+  await maybeChainBalances(sdk, true);
+
+  // CCTP deposit / relayer withdraw.
+  await maybeSolanaDeposit(sdk, boolEnv("RUN_SOLANA_DEPOSIT"), numberEnv("SOLANA_DEPOSIT_AMOUNT", 10));
+  await maybeSolanaWithdraw(
+    sdk,
+    boolEnv("RUN_SOLANA_WITHDRAW"),
+    numberEnv("SOLANA_WITHDRAW_AMOUNT", 5)
+  );
+
+  // Trading works the same as Sui (order payloads are signed with the Solana key).
+  const perpId = await fetchPerpId(sdk, symbol, undefined);
+  await maybePlaceMarketOrder(
+    sdk,
+    symbol,
+    perpId,
+    boolEnv("RUN_MARKET_ORDER"),
+    process.env.MARKET_ORDER_QTY || "0.01",
+    process.env.MARKET_ORDER_LEVERAGE || "20",
+    toOrderSide(process.env.MARKET_ORDER_SIDE, OrderSide.BUY)
+  );
+  await maybePlaceLimitOrder(
+    sdk,
+    symbol,
+    perpId,
+    boolEnv("RUN_LIMIT_ORDER"),
+    process.env.LIMIT_ORDER_QTY || "0.01",
+    process.env.LIMIT_ORDER_LEVERAGE || "20",
+    process.env.LIMIT_ORDER_PRICE || "75000",
+    toOrderSide(process.env.LIMIT_ORDER_SIDE, OrderSide.BUY)
+  );
+  await maybeCancelFirstOrder(sdk, symbol, boolEnv("RUN_CANCEL_ORDER"));
+
+  printDivider();
+  console.log("🎉 Solana demo complete. Enable additional sections via env flags as needed.");
+}
+
 async function main() {
+  const chain = stringEnv("CHAIN", "sui").toLowerCase();
+  const network = (process.env.NETWORK as Network) || "testnet";
+
+  // Solana wallets use a dedicated CCTP + relayer flow.
+  if (chain === "solana") {
+    const solPrivateKey = process.env.SOLANA_PRIVATE_KEY || process.env.PRIVATE_KEY;
+    if (!solPrivateKey) {
+      console.error(
+        "❌ SOLANA_PRIVATE_KEY (or PRIVATE_KEY) env variable is required for CHAIN=solana."
+      );
+      process.exit(1);
+    }
+    await runSolanaDemo(solPrivateKey, network);
+    return;
+  }
+
   const privateKey = process.env.PRIVATE_KEY;
   if (!privateKey) {
     console.error("❌ PRIVATE_KEY env variable is required. Provide it via .env or shell.");
     process.exit(1);
   }
 
-  const network = (process.env.NETWORK as Network) || "testnet";
   const symbol = stringEnv("DEMO_SYMBOL", "BTC-PERP");
 
   const sdk = initDipCoinPerpSDK(privateKey, {
