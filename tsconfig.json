@@ -9,7 +9,11 @@
     "skipLibCheck": true,
     "noEmit": true,
     "types": ["node"],
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "@dipcoinlab/perp-client-ts": ["../dipcoin-perp-client-ts/src/index.ts"]
+    }
   },
   "include": ["*.ts"]
 }

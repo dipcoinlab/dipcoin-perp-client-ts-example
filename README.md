@@ -38,7 +38,7 @@ cp .env.example .env
 Optional:
 
 - `API_BASE_URL`: override the default mainnet/testnet REST base URL
-- `CUSTOM_RPC`: custom Sui JSON-RPC (defaults to the SDK's per-network endpoint)
+- `CUSTOM_RPC`: custom Sui gRPC endpoint (Sui has migrated off JSON-RPC; defaults to the SDK's per-network gRPC fullnode)
 
 See `.env.example` and the table below for the full set of toggles.
 
@@ -65,14 +65,26 @@ SOLANA_WITHDRAW_AMOUNT=5
 ```
 
 With `CHAIN=solana` the demo prints balances (SOL + Solana USDC + Sui Bank),
-runs the opt-in CCTP deposit / relayer withdraw, and can place chain-aware
-orders (`RUN_MARKET_ORDER` / `RUN_LIMIT_ORDER`). Programmatic entry points:
+runs the opt-in CCTP deposit / relayer withdraw, and reuses the same `RUN_*`
+flags as the Sui flow:
+
+- **Orders / cancel** (`RUN_MARKET_ORDER`, `RUN_LIMIT_ORDER`, `RUN_CANCEL_ORDER`) —
+  payloads signed with the Solana key (`creator = "Solana:<base58>"`).
+- **Margin** (`RUN_MARGIN_ADD`, `RUN_MARGIN_REMOVE`) — signed payload dispatched
+  to the **relayer** (a Solana wallet cannot pay Sui gas / build a PTB).
+- **TP/SL** (`RUN_TPSL_DEMO`, `RUN_TPSL_EDIT`) — order API, no relayer needed.
+- **Vault** (`RUN_VAULT_REST`, `RUN_VAULT_DEPOSIT`, `RUN_VAULT_WITHDRAW`) —
+  on-chain deposit & withdraw request go through the **relayer**.
+
+Programmatic entry points:
 
 ```ts
 const sdk = initDipCoinPerpSDK(SOLANA_PRIVATE_KEY, { chain: "solana", network: "testnet" });
 await sdk.authenticate();
 await sdk.depositToBankFromSolana({ amount: 10 });   // CCTP deposit
 await sdk.withdrawFromBankToSolana({ amount: 5 });   // relayer withdraw
+await sdk.addMargin({ symbol: "BTC-PERP", amount: 10 });          // relayer
+await sdk.depositToVault({ vaultId, amount: "10" });             // relayer
 ```
 
 ## Run
@@ -102,7 +114,7 @@ yarn typecheck
 | `RUN_SOLANA_WITHDRAW` / `SOLANA_WITHDRAW_AMOUNT` | Relayer withdraw Sui Bank → Solana | `0` / `5` |
 | `NETWORK` | `mainnet` / `testnet` | `testnet` |
 | `DEMO_SYMBOL` | Primary trading symbol, e.g. `BTC-PERP` | `BTC-PERP` |
-| `API_BASE_URL` / `CUSTOM_RPC` | Optional REST / RPC overrides | SDK defaults |
+| `API_BASE_URL` / `CUSTOM_RPC` | Optional REST / Sui gRPC overrides | SDK defaults |
 | `RUN_MARKET_DATA` | Order book + ticker snapshot | `1` (the demo opts in by default) |
 | `RUN_EXTENDED_PUBLIC` | Global config, volume, funding, klines, announcements, oracle / signed price feeds | `0` |
 | `RUN_CHAIN_BALANCES` | `getChainBalances()` | `0` |

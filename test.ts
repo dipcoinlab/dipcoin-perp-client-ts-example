@@ -1433,6 +1433,30 @@ async function runSolanaDemo(privateKey: string, network: Network) {
   );
   await maybeCancelFirstOrder(sdk, symbol, boolEnv("RUN_CANCEL_ORDER"));
 
+  // Margin add/remove. On Solana the wallet cannot pay Sui gas or build a PTB,
+  // so addMargin/removeMargin sign a payload with the Solana key and submit it
+  // to the relayer (`/api/perp-relayer/v1/relay`), which broadcasts on Sui.
+  await maybeRunMarginFlow(
+    sdk,
+    stringEnv("MARGIN_SYMBOL", symbol),
+    boolEnv("RUN_MARGIN_ADD"),
+    boolEnv("RUN_MARGIN_REMOVE"),
+    numberEnv("MARGIN_ADD_AMOUNT", 10),
+    numberEnv("MARGIN_REMOVE_AMOUNT", 1)
+  );
+
+  // TP/SL place / edit / cancel. Order-API operations signed with the Solana
+  // key (creator = `Solana:<base58>`); same as Sui aside from the signature
+  // scheme — no relayer needed. Needs an open position for the demo.
+  await maybeRunTpSlFlow(sdk, stringEnv("TPSL_SYMBOL", symbol), perpId);
+
+  // Vault: REST snapshot + follower deposit / withdraw request. On Solana the
+  // on-chain deposit & withdraw request are signed with the Solana key and
+  // dispatched via the relayer.
+  await maybeVaultRestDemo(sdk, boolEnv("RUN_VAULT_REST"));
+  await maybeVaultDeposit(sdk, boolEnv("RUN_VAULT_DEPOSIT"));
+  await maybeVaultWithdraw(sdk, boolEnv("RUN_VAULT_WITHDRAW"));
+
   printDivider();
   console.log("🎉 Solana demo complete. Enable additional sections via env flags as needed.");
 }
