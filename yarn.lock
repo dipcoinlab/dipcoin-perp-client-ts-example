@@ -71,13 +71,13 @@
     bn.js "^5.1.2"
     buffer-layout "^1.2.0"
 
-"@dipcoinlab/perp-client-ts@^0.8.2":
-  version "0.8.2"
-  resolved "https://registry.npmjs.org/@dipcoinlab/perp-client-ts/-/perp-client-ts-0.8.2.tgz#1e0cca8f12ec154af1617f6a206109bd9db637d1"
-  integrity sha512-S8/zF9SlY9fOJTocWtahDlmgiT9OMhg2QDNcgxxwWoGUbVfF9Dkg5NNTYTo0fdoMJ1M5l/FnKrQzliar21LJvQ==
+"@dipcoinlab/perp-client-ts@^0.9.0":
+  version "0.9.0"
+  resolved "https://registry.npmjs.org/@dipcoinlab/perp-client-ts/-/perp-client-ts-0.9.0.tgz#aed146982aedc119c64416efd6dca97a65ad2e20"
+  integrity sha512-WnwZ6suX9tVXQfi1eV5nX1MW8W4OjAUuvcTN6zPJcGoYU3PqkVx1zpVLYsIHr62xzrVHHExnx3gTDMmsv/LqTw==
   dependencies:
     "@coral-xyz/anchor" "^0.32.1"
-    "@dipcoinlab/perp-ts-library" "^0.0.32"
+    "@dipcoinlab/perp-ts-library" "^0.0.37"
     "@mysten/sui" "^2.16.0"
     "@noble/hashes" "^1.8.0"
     "@rollup/plugin-commonjs" "^28.0.3"
@@ -96,10 +96,10 @@
     path "^0.12.7"
     tweetnacl "^1.0.3"
 
-"@dipcoinlab/perp-ts-library@^0.0.32":
-  version "0.0.32"
-  resolved "https://registry.npmjs.org/@dipcoinlab/perp-ts-library/-/perp-ts-library-0.0.32.tgz#a178928fc39ab198809201d81428d2a63af0b606"
-  integrity sha512-6xsHdPW23THqn1yH5TdqrgXoQktctugf1amthYeM81JS6xBkm8WuOVTfpxcxjXp7uD7C3m74DoUkEkYHU+dKLA==
+"@dipcoinlab/perp-ts-library@^0.0.37":
+  version "0.0.37"
+  resolved "https://registry.npmjs.org/@dipcoinlab/perp-ts-library/-/perp-ts-library-0.0.37.tgz#b545790ad89748f4f9a5593e828b5c687f86e681"
+  integrity sha512-kHraRe8SaAZWa3PJ6JgCNc53bWUYPKYxs2nvpu9rcj9++5elnLNbDj/00dYuUkhUEMk1Y89FYNWpnt76x9cdHA==
   dependencies:
     "@coral-xyz/anchor" "^0.32.1"
     "@mysten/sui" "^2.12.0"

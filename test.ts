@@ -10,9 +10,11 @@ import BigNumber from "bignumber.js";
 // Switch back to `"@dipcoinlab/perp-client-ts"` when validating the published package.
 import {
   initDipCoinPerpSDK,
+  isEvmChainName,
   OrderSide,
   OrderType,
   type DipCoinPerpSDK,
+  type EvmChainName,
 } from "@dipcoinlab/perp-client-ts";
 
 type Network = "mainnet" | "testnet";
@@ -1346,6 +1348,11 @@ async function maybeSolanaDeposit(sdk: DipCoinPerpSDK, enabled: boolean, amount:
     console.log(`Bridging ${amount} USDC from Solana to the Sui Bank...`);
     const res = await sdk.depositToBankFromSolana({ amount, waitForSui: true });
     console.log("✅ Solana burn tx:", res.solanaTxHash);
+    if (res.transferMode) {
+      console.log(
+        `   mode=${res.transferMode} fee=${res.transactionFee ?? "0"} estimatedReceive=${res.estimatedReceive ?? ""}`
+      );
+    }
     if (res.suiTxHash) {
       console.log("✅ Sui receive digest:", res.suiTxHash);
     }
@@ -1365,6 +1372,9 @@ async function maybeSolanaWithdraw(sdk: DipCoinPerpSDK, enabled: boolean, amount
     console.log(`Withdrawing ${amount} USDC from the Sui Bank to Solana...`);
     const res = await sdk.withdrawFromBankToSolana({ amount, waitForSolana: false });
     console.log("✅ Relayer Sui tx digest:", res.suiTxHash);
+    if (res.estimatedReceive) {
+      console.log(`   fee=${res.transactionFee ?? "0"} estimatedReceive=${res.estimatedReceive}`);
+    }
     if (res.solanaTxHash) {
       console.log("✅ Solana mint tx:", res.solanaTxHash);
     }
@@ -1461,9 +1471,78 @@ async function runSolanaDemo(privateKey: string, network: Network) {
   console.log("🎉 Solana demo complete. Enable additional sections via env flags as needed.");
 }
 
+async function runEvmDemo(privateKey: string, network: Network) {
+  const evmChain = stringEnv("EVM_CHAIN", "ethereum").toLowerCase();
+  if (!isEvmChainName(evmChain)) {
+    console.error("❌ EVM_CHAIN must be ethereum, arbitrum, optimism, base, or polygon.");
+    process.exit(1);
+  }
+  const chainName: EvmChainName = evmChain;
+  const sdk = initDipCoinPerpSDK(privateKey, {
+    chain: "evm",
+    evmChain: chainName,
+    network,
+    ...(process.env.API_BASE_URL?.trim() ? { apiBaseUrl: process.env.API_BASE_URL.trim() } : {}),
+    ...(process.env.EVM_RPC_URL?.trim() ? { evmRpcUrl: process.env.EVM_RPC_URL.trim() } : {}),
+  });
+  console.log("Chain:", sdk.chainKind, chainName);
+  console.log("EVM address:", sdk.address);
+  console.log("Unified Sui-format identity:", sdk.onChainAddress);
+  console.log("Network:", network);
+  const authed = await authenticate(sdk);
+  if (!authed) process.exit(1);
+  await maybeChainBalances(sdk, true);
+
+  if (!boolEnv("RUN_EVM_DEPOSIT")) {
+    console.log("ℹ️  Skipping EVM deposit (set RUN_EVM_DEPOSIT=1 to enable).");
+  } else {
+    const amount = numberEnv("EVM_DEPOSIT_AMOUNT", 10);
+    const mode = stringEnv("CCTP_TRANSFER_MODE", "STANDARD").toUpperCase() === "FAST" ? "FAST" : "STANDARD";
+    logSection(`EVM CCTP V2 deposit (${chainName})`);
+    try {
+      const res = await sdk.depositToBankFromEvm({ amount, transferMode: mode, waitForSui: true });
+      console.log("✅ EVM burn tx:", res.evmTxHash);
+      console.log(
+        `   mode=${res.transferMode ?? mode} fee=${res.transactionFee ?? "0"} estimatedReceive=${res.estimatedReceive ?? ""}`
+      );
+      if (res.suiTxHash) console.log("✅ Sui receive digest:", res.suiTxHash);
+    } catch (error) {
+      console.error("❌ EVM deposit failed:", error instanceof Error ? error.message : error);
+    }
+  }
+
+  if (!boolEnv("RUN_EVM_WITHDRAW")) {
+    console.log("ℹ️  Skipping EVM withdraw (set RUN_EVM_WITHDRAW=1 to enable).");
+  } else {
+    const amount = numberEnv("EVM_WITHDRAW_AMOUNT", 5);
+    logSection(`EVM CCTP withdraw (${chainName})`);
+    try {
+      const res = await sdk.withdrawFromBankToEvm({ amount });
+      console.log("✅ Relayer Sui tx digest:", res.suiTxHash);
+      console.log(`   fee=${res.transactionFee ?? "0"} estimatedReceive=${res.estimatedReceive ?? ""}`);
+      if (res.destinationTxHash) console.log("✅ Destination tx:", res.destinationTxHash);
+    } catch (error) {
+      console.error("❌ EVM withdraw failed:", error instanceof Error ? error.message : error);
+    }
+  }
+
+  printDivider();
+  console.log("🎉 EVM demo complete. The same address is a separate Bank account on each EVM chain.");
+}
+
 async function main() {
   const chain = stringEnv("CHAIN", "sui").toLowerCase();
   const network = (process.env.NETWORK as Network) || "testnet";
+
+  if (chain === "evm") {
+    const evmPrivateKey = process.env.EVM_PRIVATE_KEY || process.env.PRIVATE_KEY;
+    if (!evmPrivateKey) {
+      console.error("❌ EVM_PRIVATE_KEY (or PRIVATE_KEY) is required for CHAIN=evm.");
+      process.exit(1);
+    }
+    await runEvmDemo(evmPrivateKey, network);
+    return;
+  }
 
   // Solana wallets use a dedicated CCTP + relayer flow.
   if (chain === "solana") {

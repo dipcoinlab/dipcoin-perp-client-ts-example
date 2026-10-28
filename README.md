@@ -50,9 +50,10 @@ See `.env.example` and the table below for the full set of toggles.
 ## Solana (CCTP) support
 
 The SDK can sign for a **Solana** wallet. Because Solana wallets cannot pay Sui
-gas, deposits bridge USDC through **Circle CCTP** and withdrawals are submitted
-to the DipCoin **relayer**; trading/order payloads are signed with the Solana
-Ed25519 key. Enable it via `CHAIN=solana`:
+gas, deposits bridge USDC through **Circle CCTP V2** (`depositForBurn`, quote +
+fee-payer from the relayer) and withdrawals use a withdraw quote before the
+signed payload is submitted to the DipCoin **relayer**. Trading payloads are
+signed with the Solana Ed25519 key. Enable it via `CHAIN=solana`:
 
 ```bash
 CHAIN=solana
@@ -75,6 +76,18 @@ flags as the Sui flow:
 - **TP/SL** (`RUN_TPSL_DEMO`, `RUN_TPSL_EDIT`) — order API, no relayer needed.
 - **Vault** (`RUN_VAULT_REST`, `RUN_VAULT_DEPOSIT`, `RUN_VAULT_WITHDRAW`) —
   on-chain deposit & withdraw request go through the **relayer**.
+
+EVM (Ethereum, Arbitrum, OP, Base, Polygon) uses the same CCTP V2 quote:
+
+```bash
+CHAIN=evm
+EVM_CHAIN=base          # ethereum | arbitrum | optimism | base | polygon
+EVM_PRIVATE_KEY=0x...
+RUN_EVM_DEPOSIT=0
+RUN_EVM_WITHDRAW=0
+```
+
+Polygon only supports `CCTP_TRANSFER_MODE=STANDARD`.
 
 Programmatic entry points:
 
@@ -107,11 +120,17 @@ yarn typecheck
 | Variable | Description | Default |
 | --- | --- | --- |
 | `PRIVATE_KEY` | Wallet private key (**required** for `CHAIN=sui`) | — |
-| `CHAIN` | `sui` / `solana` | `sui` |
+| `CHAIN` | `sui` / `solana` / `evm` | `sui` |
 | `SOLANA_PRIVATE_KEY` | Solana key (required for `CHAIN=solana`; falls back to `PRIVATE_KEY`) | — |
 | `SOLANA_RPC_URL` | Optional Solana RPC override | SDK default |
 | `RUN_SOLANA_DEPOSIT` / `SOLANA_DEPOSIT_AMOUNT` | CCTP deposit Solana → Sui Bank | `0` / `10` |
 | `RUN_SOLANA_WITHDRAW` / `SOLANA_WITHDRAW_AMOUNT` | Relayer withdraw Sui Bank → Solana | `0` / `5` |
+| `EVM_CHAIN` | `ethereum` / `arbitrum` / `optimism` / `base` / `polygon` | `ethereum` |
+| `EVM_PRIVATE_KEY` | EVM key for `CHAIN=evm`; falls back to `PRIVATE_KEY` | — |
+| `EVM_RPC_URL` | Optional EVM RPC override | SDK default |
+| `RUN_EVM_DEPOSIT` / `EVM_DEPOSIT_AMOUNT` | CCTP V2 deposit on `EVM_CHAIN` | `0` / `10` |
+| `CCTP_TRANSFER_MODE` | `STANDARD` or `FAST` (Polygon is STANDARD only) | `STANDARD` |
+| `RUN_EVM_WITHDRAW` / `EVM_WITHDRAW_AMOUNT` | Quoted withdraw back to that EVM chain | `0` / `5` |
 | `NETWORK` | `mainnet` / `testnet` | `testnet` |
 | `DEMO_SYMBOL` | Primary trading symbol, e.g. `BTC-PERP` | `BTC-PERP` |
 | `API_BASE_URL` / `CUSTOM_RPC` | Optional REST / Sui gRPC overrides | SDK defaults |
